@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
 import axios from 'axios';
+import ReCAPTCHA from "react-google-recaptcha";
 
 function App() {
   const [view, setView] = useState('login');
@@ -7,31 +8,58 @@ function App() {
   const [user, setUser] = useState(null);
   const [formData, setFormData] = useState({ firstName: '', lastName: '', email: '', uin: '', password: '' });
   const [message, setMessage] = useState('');
+  const [recaptchaToken, setRecaptchaToken] = useState(null);
 
-  // Milestone 2 State
+  // Milestone 2 & 3 State
   const [advisingHistory, setAdvisingHistory] = useState([]);
+  const [adminRecords, setAdminRecords] = useState([]);
   const [editingRecordId, setEditingRecordId] = useState(null);
   const [advisingForm, setAdvisingForm] = useState({
-    lastTerm: '', lastGpa: '', currentTerm: '', pastCourses: '', plannedCourses: []
+    lastTerm: '', lastGpa: '', currentTerm: '', pastCourses: '', plannedCourses: [], admin_feedback: ''
   });
+  const [adminFeedbackInput, setAdminFeedbackInput] = useState('');
 
   const availableCourses = ["CS410", "CS411", "CS417", "CS418", "CS462", "CS471", "CS488"];
 
   useEffect(() => {
-    if (view === 'dashboard' && subView === 'advising-history' && user) {
-      axios.get(`http://localhost:5000/api/advising-history/${user.email}`)
-        .then(res => setAdvisingHistory(res.data))
-        .catch(err => console.error(err));
+    if (view === 'dashboard' && user) {
+      if (!user.isAdmin && subView === 'advising-history') {
+        axios.get(`http://localhost:5000/api/advising-history/${user.email}`)
+          .then(res => setAdvisingHistory(res.data))
+          .catch(err => console.error(err));
+      } else if (user.isAdmin && subView === 'admin-dashboard') {
+        axios.get(`http://localhost:5000/api/admin/advising`)
+          .then(res => setAdminRecords(res.data))
+          .catch(err => console.error(err));
+      }
     }
   }, [view, subView, user]);
 
-  const isFrozen = editingRecordId && advisingHistory.find(r => r.id === editingRecordId)?.status !== 'Pending';
+  const isFrozen = editingRecordId && (user?.isAdmin || advisingHistory.find(r => r.id === editingRecordId)?.status !== 'Pending');
 
   const handleAuth = async (e) => {
     e.preventDefault();
+    
+    // Milestone 3: Task 4
+    if (view === 'register') {
+      const passwordRegex = /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[@$!%*?&])[A-Za-z\d@$!%*?&]{8,}$/;
+      if (!passwordRegex.test(formData.password)) {
+        alert("Password must be at least 8 characters long, with 1 uppercase, 1 lowercase, 1 number, and 1 special character.");
+        return;
+      }
+    }
+
+    // Milestone 3: Task 1
+    if (view === 'login' && !recaptchaToken) {
+      alert("Please complete the reCAPTCHA challenge.");
+      return;
+    }
+
     const endpoint = view === 'login' ? '/login' : '/register';
     try {
-      const res = await axios.post(`http://localhost:5000${endpoint}`, formData);
+      const payload = view === 'login' ? { ...formData, recaptchaToken } : formData;
+      const res = await axios.post(`http://localhost:5000${endpoint}`, payload);
+      
       if (view === 'login') {
         setUser(res.data.user);
         setView('2fa');
@@ -55,25 +83,50 @@ function App() {
         pastCourses: advisingForm.pastCourses.split(',').map(s => s.trim()),
         plannedCourses: advisingForm.plannedCourses
       };
-      if (editingRecordId) await axios.put(`http://localhost:5000/api/update-advising/${editingRecordId}`, payload);
-      else await axios.post('http://localhost:5000/api/submit-advising', payload);
+      if (editingRecordId) {
+        await axios.put(`http://localhost:5000/api/update-advising/${editingRecordId}`, payload);
+      } else {
+        await axios.post('http://localhost:5000/api/submit-advising', payload);
+      }
       setSubView('advising-history');
     } catch (err) {
       alert(err.response?.data?.error || "Submission failed");
     }
   };
 
-  const loadRecord = async (id, status) => {
+  const loadRecord = async (id, isAdminView = false) => {
     try {
       const res = await axios.get(`http://localhost:5000/api/advising-record/${id}`);
       setAdvisingForm({
-        lastTerm: res.data.last_term_attended || '', lastGpa: res.data.last_gpa || '',
-        currentTerm: res.data.current_term || '', pastCourses: '',
-        plannedCourses: res.data.plannedCourses || []
+        lastTerm: res.data.last_term_attended || '', 
+        lastGpa: res.data.last_gpa || '',
+        currentTerm: res.data.current_term || '', 
+        pastCourses: '',
+        plannedCourses: res.data.plannedCourses || [],
+        admin_feedback: res.data.admin_feedback || '',
+        status: res.data.status
       });
       setEditingRecordId(id);
-      setSubView('advising-form');
-    } catch (err) { alert("Failed to load record."); }
+      setAdminFeedbackInput('');
+      setSubView(isAdminView ? 'admin-review' : 'advising-form');
+    } catch (err) { 
+      alert("Failed to load record."); 
+    }
+  };
+
+  const handleAdminDecision = async (status) => {
+    if (!adminFeedbackInput.trim()) {
+      return alert("You must provide feedback before submitting a decision.");
+    }
+    try {
+      await axios.put(`http://localhost:5000/api/admin/advising/${editingRecordId}`, { 
+        status, 
+        feedback: adminFeedbackInput 
+      });
+      setSubView('admin-dashboard');
+    } catch (err) { 
+      alert("Failed to update record."); 
+    }
   };
 
   const handleForgotPassword = async () => {
@@ -89,13 +142,10 @@ function App() {
     }
   };
 
-  // ==========================================
-  // CUSTOM CSS FOR PREMIUM UI
-  // ==========================================
   const customStyles = `
     @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
     body { margin: 0; font-family: 'Inter', sans-serif; background-color: #f3f4f6; color: #1f2937; }
-    input, select { font-family: 'Inter', sans-serif; }
+    input, select, textarea { font-family: 'Inter', sans-serif; }
     
     .login-container { display: flex; height: 100vh; }
     .login-left { flex: 1; background: linear-gradient(135deg, #0f172a 0%, #1e3a8a 100%); display: flex; flex-direction: column; justify-content: center; padding: 4rem; color: white; }
@@ -111,7 +161,8 @@ function App() {
     .btn-primary:hover { background-color: #1d4ed8; }
     .btn-secondary { background-color: #e5e7eb; color: #374151; }
     .btn-secondary:hover { background-color: #d1d5db; }
-    .btn-danger { background-color: #ef4444; color: white; padding: 8px 12px; border-radius: 6px; }
+    .btn-success { background-color: #10b981; color: white; }
+    .btn-danger { background-color: #ef4444; color: white; }
     
     .dashboard { display: flex; min-height: 100vh; }
     .sidebar { width: 260px; background-color: #0f172a; color: white; display: flex; flex-direction: column; }
@@ -136,9 +187,6 @@ function App() {
     .svg-icon { width: 20px; height: 20px; }
   `;
 
-  // ==========================================
-  // AUTHENTICATION & 2FA VIEWS
-  // ==========================================
   if (view === '2fa') {
     return (
       <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100vh', background: '#f3f4f6' }}>
@@ -151,8 +199,12 @@ function App() {
           <p style={{ color: '#6b7280', marginBottom: '24px' }}>Enter the 6-digit code sent to your device.</p>
           <input type="text" id="mfa-code" className="input-field" placeholder="123456" style={{ textAlign: 'center', fontSize: '24px', letterSpacing: '8px' }} />
           <button className="btn btn-primary" onClick={() => {
-            if (document.getElementById('mfa-code').value === "123456") setView('dashboard');
-            else alert("Invalid code. Try 123456.");
+            if (document.getElementById('mfa-code').value === "123456") {
+              setView('dashboard');
+              setSubView(user.isAdmin ? 'admin-dashboard' : 'home');
+            } else {
+              alert("Invalid code. Try 123456.");
+            }
           }}>Verify Identity</button>
         </div>
       </div>
@@ -190,9 +242,17 @@ function App() {
               <input className="input-field" type="password" placeholder="Password" onChange={e => setFormData({...formData, password: e.target.value})} required />
               
               {view === 'login' && (
-                <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: '20px' }}>
-                  <span onClick={handleForgotPassword} style={{ fontSize: '14px', color: '#2563eb', cursor: 'pointer', fontWeight: '500' }}>Forgot password?</span>
-                </div>
+                <>
+                  <div style={{ marginBottom: '20px', display: 'flex', justifyContent: 'center' }}>
+                    <ReCAPTCHA 
+                      sitekey="6LcGoM8sAAAAAP2pynN1XDoBm6fNv3DdgU3jgcr5" 
+                      onChange={(token) => setRecaptchaToken(token)} 
+                    />
+                  </div>
+                  <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: '20px' }}>
+                    <span onClick={handleForgotPassword} style={{ fontSize: '14px', color: '#2563eb', cursor: 'pointer', fontWeight: '500' }}>Forgot password?</span>
+                  </div>
+                </>
               )}
               
               <button type="submit" className="btn btn-primary" style={{ marginTop: view === 'register' ? '16px' : '0' }}>
@@ -202,7 +262,11 @@ function App() {
             
             <p style={{ textAlign: 'center', marginTop: '32px', color: '#6b7280', fontSize: '14px' }}>
               {view === 'login' ? "Don't have an account? " : "Already registered? "}
-              <span style={{ color: '#2563eb', cursor: 'pointer', fontWeight: '600' }} onClick={() => { setView(view === 'login' ? 'register' : 'login'); setMessage(''); }}>
+              <span style={{ color: '#2563eb', cursor: 'pointer', fontWeight: '600' }} onClick={() => { 
+                setView(view === 'login' ? 'register' : 'login'); 
+                setMessage(''); 
+                setRecaptchaToken(null); 
+              }}>
                 {view === 'login' ? 'Sign up' : 'Log in'}
               </span>
             </p>
@@ -223,31 +287,53 @@ function App() {
       <div className="sidebar">
         <div className="sidebar-header">
           <h2 style={{ margin: 0, fontSize: '18px', display: 'flex', alignItems: 'center', gap: '10px' }}>
-            <div style={{ width: '8px', height: '8px', borderRadius: '50%', background: user.isAdmin ? '#ef4444' : '#10b981' }}></div>
-            {user.isAdmin ? 'Admin Console' : 'Student Hub'}
+            <div style={{ width: '8px', height: '8px', borderRadius: '50%', background: user?.isAdmin ? '#ef4444' : '#10b981' }}></div>
+            {user?.isAdmin ? 'Admin Console' : 'Student Hub'}
           </h2>
-          <p style={{ margin: '8px 0 0 0', fontSize: '13px', color: '#94a3b8' }}>{user.email}</p>
+          <p style={{ margin: '8px 0 0 0', fontSize: '13px', color: '#94a3b8' }}>{user?.email}</p>
         </div>
         
-        <button className={`nav-btn ${subView === 'home' ? 'nav-active' : ''}`} onClick={() => setSubView('home')}>
-          <svg className="svg-icon" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-6 0a1 1 0 001-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1m-6 0h6"></path></svg>
-          Dashboard Overview
-        </button>
-        <button className={`nav-btn ${subView === 'profile' ? 'nav-active' : ''}`} onClick={() => setSubView('profile')}>
-          <svg className="svg-icon" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z"></path></svg>
-          My Profile
-        </button>
-        <button className={`nav-btn ${subView === 'security' ? 'nav-active' : ''}`} onClick={() => setSubView('security')}>
-          <svg className="svg-icon" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z"></path></svg>
-          Security Settings
-        </button>
-        <button className={`nav-btn ${subView.includes('advising') ? 'nav-active' : ''}`} onClick={() => setSubView('advising-history')}>
-          <svg className="svg-icon" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"></path></svg>
-          Course Advising
-        </button>
+        {!user?.isAdmin && (
+          <button className={`nav-btn ${subView === 'home' ? 'nav-active' : ''}`} onClick={() => setSubView('home')}>
+            <svg className="svg-icon" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-6 0a1 1 0 001-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1m-6 0h6"></path></svg>
+            Dashboard Overview
+          </button>
+        )}
+
+        {!user?.isAdmin && (
+          <button className={`nav-btn ${subView === 'profile' ? 'nav-active' : ''}`} onClick={() => setSubView('profile')}>
+            <svg className="svg-icon" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z"></path></svg>
+            My Profile
+          </button>
+        )}
+
+        {!user?.isAdmin && (
+          <button className={`nav-btn ${subView === 'security' ? 'nav-active' : ''}`} onClick={() => setSubView('security')}>
+            <svg className="svg-icon" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z"></path></svg>
+            Security Settings
+          </button>
+        )}
+
+        {!user?.isAdmin && (
+          <button className={`nav-btn ${subView.includes('advising') ? 'nav-active' : ''}`} onClick={() => setSubView('advising-history')}>
+            <svg className="svg-icon" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"></path></svg>
+            Course Advising
+          </button>
+        )}
+
+        {user?.isAdmin && (
+          <button className={`nav-btn ${subView.includes('admin') ? 'nav-active' : ''}`} onClick={() => setSubView('admin-dashboard')}>
+            <svg className="svg-icon" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"></path></svg>
+            Review Forms
+          </button>
+        )}
         
         <div style={{ flex: 1 }}></div>
-        <button className="nav-btn" style={{ borderTop: '1px solid #1e293b', color: '#f87171' }} onClick={() => { setView('login'); setUser(null); }}>
+        <button className="nav-btn" style={{ borderTop: '1px solid #1e293b', color: '#f87171' }} onClick={() => { 
+          setView('login'); 
+          setUser(null); 
+          setRecaptchaToken(null); 
+        }}>
           <svg className="svg-icon" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1"></path></svg>
           Secure Logout
         </button>
@@ -258,7 +344,7 @@ function App() {
         
         {subView === 'home' && (
           <div>
-            <h1 style={{ fontSize: '32px', marginBottom: '8px', color: '#111827' }}>Welcome back, {user.firstName}</h1>
+            <h1 style={{ fontSize: '32px', marginBottom: '8px', color: '#111827' }}>Welcome back, {user?.firstName}</h1>
             <p style={{ color: '#6b7280', fontSize: '16px', marginBottom: '32px' }}>Here is a summary of your academic profile and recent activities.</p>
             
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(300px, 1fr))', gap: '24px' }}>
@@ -279,14 +365,14 @@ function App() {
             <h2 style={{ marginTop: 0, borderBottom: '1px solid #e5e7eb', paddingBottom: '16px', marginBottom: '24px' }}>Personal Information</h2>
             <div style={{ background: '#f8fafc', padding: '16px', borderRadius: '8px', marginBottom: '24px', border: '1px solid #e2e8f0' }}>
               <label style={{ display: 'block', fontSize: '13px', color: '#64748b', fontWeight: '600', marginBottom: '4px' }}>Registered Email (Immutable)</label>
-              <div style={{ fontWeight: '500', color: '#334155' }}>{user.email}</div>
+              <div style={{ fontWeight: '500', color: '#334155' }}>{user?.email}</div>
             </div>
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px' }}>
-              <div><label style={{ display: 'block', fontWeight: '500', marginBottom: '8px' }}>First Name</label><input className="input-field" value={user.firstName} onChange={e => setUser({...user, firstName: e.target.value})} /></div>
-              <div><label style={{ display: 'block', fontWeight: '500', marginBottom: '8px' }}>Last Name</label><input className="input-field" value={user.lastName || ''} onChange={e => setUser({...user, lastName: e.target.value})} /></div>
+              <div><label style={{ display: 'block', fontWeight: '500', marginBottom: '8px' }}>First Name</label><input className="input-field" value={user?.firstName || ''} onChange={e => setUser({...user, firstName: e.target.value})} /></div>
+              <div><label style={{ display: 'block', fontWeight: '500', marginBottom: '8px' }}>Last Name</label><input className="input-field" value={user?.lastName || ''} onChange={e => setUser({...user, lastName: e.target.value})} /></div>
             </div>
             <label style={{ display: 'block', fontWeight: '500', marginBottom: '8px' }}>University ID (UIN)</label>
-            <input className="input-field" value={user.uin || ''} onChange={e => setUser({...user, uin: e.target.value})} />
+            <input className="input-field" value={user?.uin || ''} onChange={e => setUser({...user, uin: e.target.value})} />
             <button className="btn btn-primary" style={{ marginTop: '16px' }} onClick={() => axios.post('http://localhost:5000/update-profile', user).then(() => alert('Profile Details Saved'))}>Save Changes</button>
           </div>
         )}
@@ -305,14 +391,53 @@ function App() {
           </div>
         )}
 
-        {/* MILESTONE 2: HISTORY TABLE */}
+        {/* ========================================== */}
+        {/* MILESTONE 3: ADMIN DASHBOARD (TASK 6) */}
+        {/* ========================================== */}
+        {subView === 'admin-dashboard' && (
+          <div className="card">
+            <h2 style={{ margin: '0 0 24px 0' }}>Submitted Advising Forms</h2>
+            <div style={{ overflowX: 'auto', borderRadius: '8px', border: '1px solid #e5e7eb' }}>
+              <table className="table">
+                <thead>
+                  <tr>
+                    <th>Student Name</th>
+                    <th>Term</th>
+                    <th>Status</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {adminRecords.length === 0 && <tr><td colSpan="3" style={{ textAlign: 'center', color: '#9ca3af', padding: '32px' }}>No pending records</td></tr>}
+                  {adminRecords.map(r => (
+                    <tr key={r.id}>
+                      <td>
+                        <a href="#" style={{ color: '#2563eb', fontWeight: '500', textDecoration: 'none' }} onClick={(e) => { 
+                          e.preventDefault(); 
+                          loadRecord(r.id, true); 
+                        }}>
+                          {r.first_name} {r.last_name}
+                        </a>
+                      </td>
+                      <td>{r.current_term}</td>
+                      <td><span className={`badge badge-${r.status.toLowerCase()}`}>{r.status}</span></td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )}
+
+        {/* ========================================== */}
+        {/* MILESTONE 2: STUDENT ADVISING HISTORY TABLE */}
+        {/* ========================================== */}
         {subView === 'advising-history' && (
           <div className="card">
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '24px' }}>
-              <h2 style={{ margin: 0 }}>Course Advising Records</h2>
+              <h2 style={{ margin: 0 }}>My Advising Records</h2>
               <button className="btn btn-primary" style={{ width: 'auto', padding: '10px 20px', display: 'flex', alignItems: 'center', gap: '8px' }} onClick={() => {
                 setEditingRecordId(null); 
-                setAdvisingForm({lastTerm:'', lastGpa:'', currentTerm:'', pastCourses:'', plannedCourses:[]}); 
+                setAdvisingForm({lastTerm:'', lastGpa:'', currentTerm:'', pastCourses:'', plannedCourses:[], admin_feedback:''}); 
                 setSubView('advising-form');
               }}>
                 <svg className="svg-icon" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 4v16m8-8H4"></path></svg>
@@ -338,8 +463,8 @@ function App() {
                       <td style={{ fontWeight: '500' }}>{r.current_term}</td>
                       <td><span className={`badge badge-${r.status.toLowerCase()}`}>{r.status}</span></td>
                       <td style={{ textAlign: 'right' }}>
-                        <button className="btn btn-secondary" style={{ width: 'auto', padding: '6px 16px', fontSize: '13px' }} onClick={() => loadRecord(r.id, r.status)}>
-                          {r.status === 'Pending' ? 'Edit Record' : 'View Read-Only'}
+                        <button className="btn btn-secondary" style={{ width: 'auto', padding: '6px 16px', fontSize: '13px' }} onClick={() => loadRecord(r.id)}>
+                          {r.status === 'Pending' ? 'Edit Record' : 'View Details'}
                         </button>
                       </td>
                     </tr>
@@ -350,21 +475,31 @@ function App() {
           </div>
         )}
 
-        {/* MILESTONE 2: DYNAMIC FORM */}
-        {subView === 'advising-form' && (
+        {/* ========================================== */}
+        {/* MILESTONE 2 & 3: DYNAMIC FORM & ADMIN REVIEW */}
+        {/* ========================================== */}
+        {(subView === 'advising-form' || subView === 'admin-review') && (
           <div className="card" style={{ maxWidth: '800px', margin: '0 auto' }}>
-            <button style={{ background: 'none', border: 'none', color: '#6b7280', cursor: 'pointer', marginBottom: '24px', padding: 0, display: 'flex', alignItems: 'center', gap: '8px', fontWeight: '500' }} onClick={() => setSubView('advising-history')}>
+            <button style={{ background: 'none', border: 'none', color: '#6b7280', cursor: 'pointer', marginBottom: '24px', padding: 0, display: 'flex', alignItems: 'center', gap: '8px', fontWeight: '500' }} onClick={() => setSubView(user.isAdmin ? 'admin-dashboard' : 'advising-history')}>
               <svg className="svg-icon" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M10 19l-7-7m0 0l7-7m-7 7h18"></path></svg>
               Back to Records
             </button>
             
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '32px', borderBottom: '1px solid #e5e7eb', paddingBottom: '24px' }}>
               <div>
-                <h2 style={{ margin: '0 0 8px 0' }}>{isFrozen ? 'Advising Record (Locked)' : 'Course Advising Submission'}</h2>
-                <p style={{ margin: 0, color: '#6b7280' }}>Fill out your academic history and plan your upcoming term.</p>
+                <h2 style={{ margin: '0 0 8px 0' }}>{user.isAdmin ? 'Review Student Submission' : (isFrozen ? 'Advising Record (Locked)' : 'Course Advising Submission')}</h2>
+                <p style={{ margin: 0, color: '#6b7280' }}>{user.isAdmin ? 'Review the proposed courses and issue a decision.' : 'Review your academic history and course plan.'}</p>
               </div>
-              {isFrozen && <span className="badge badge-approved" style={{ fontSize: '14px', padding: '8px 16px' }}>Read-Only Mode</span>}
+              {isFrozen && !user.isAdmin && <span className={`badge badge-${advisingForm.status?.toLowerCase() || 'approved'}`} style={{ fontSize: '14px', padding: '8px 16px' }}>{advisingForm.status}</span>}
             </div>
+
+            {/* MILESTONE 3: TASK 10 - DISPLAY ADMIN FEEDBACK TO STUDENT */}
+            {advisingForm.admin_feedback && (
+              <div style={{ background: advisingForm.status === 'Rejected' ? '#fef2f2' : '#f0fdf4', border: `1px solid ${advisingForm.status === 'Rejected' ? '#fecaca' : '#bbf7d0'}`, padding: '16px', borderRadius: '8px', marginBottom: '24px' }}>
+                <strong style={{ color: advisingForm.status === 'Rejected' ? '#991b1b' : '#166534', display: 'block', marginBottom: '8px' }}>Advisor Feedback:</strong>
+                <span style={{ color: advisingForm.status === 'Rejected' ? '#b91c1c' : '#15803d' }}>{advisingForm.admin_feedback}</span>
+              </div>
+            )}
             
             <form onSubmit={submitAdvising}>
               <h3 style={{ fontSize: '16px', color: '#111827', marginBottom: '16px' }}>1. Academic History</h3>
@@ -379,7 +514,7 @@ function App() {
                 </div>
               </div>
 
-              {!editingRecordId && (
+              {!editingRecordId && !user.isAdmin && (
                 <div style={{ background: '#f8fafc', border: '1px solid #e2e8f0', padding: '20px', borderRadius: '8px', marginBottom: '32px' }}>
                   <label style={{ display: 'block', fontWeight: '600', color: '#334155', marginBottom: '8px' }}>Courses Taken Last Term</label>
                   <p style={{ fontSize: '13px', color: '#64748b', marginTop: 0, marginBottom: '12px' }}>Enter courses separated by commas to prevent overlapping in your plan below.</p>
@@ -430,14 +565,40 @@ function App() {
                   </div>
                 ))}
 
-                {!isFrozen && (
+                {!isFrozen && !user.isAdmin && (
                   <button type="button" className="btn btn-secondary" style={{ width: 'auto', padding: '10px 20px', border: '1px dashed #cbd5e1', background: 'transparent' }} onClick={() => {
                     setAdvisingForm({...advisingForm, plannedCourses: [...advisingForm.plannedCourses, {level: 'Undergraduate', course_name: ''}]});
                   }}>+ Add Course</button>
                 )}
               </div>
 
-              {!isFrozen && (
+              {/* ========================================== */}
+              {/* MILESTONE 3: TASK 7 - ADMIN FEEDBACK INPUT */}
+              {/* ========================================== */}
+              {subView === 'admin-review' && advisingForm.status !== 'Approved' && advisingForm.status !== 'Rejected' && (
+                <div style={{ borderTop: '1px solid #e5e7eb', paddingTop: '24px', marginBottom: '24px' }}>
+                  <label style={{ display: 'block', fontWeight: '600', color: '#111827', marginBottom: '8px' }}>Mandatory Admin Feedback</label>
+                  <p style={{ margin: '0 0 16px 0', fontSize: '13px', color: '#6b7280' }}>You must provide feedback to the student before issuing a decision.</p>
+                  <textarea 
+                    className="input-field" 
+                    rows="3" 
+                    placeholder="Explain your decision to the student..." 
+                    value={adminFeedbackInput} 
+                    onChange={e => setAdminFeedbackInput(e.target.value)}
+                  ></textarea>
+                  
+                  <div style={{ display: 'flex', gap: '16px', marginTop: '16px' }}>
+                    <button type="button" className="btn btn-success" onClick={() => handleAdminDecision('Approved')}>
+                      Approve Record
+                    </button>
+                    <button type="button" className="btn btn-danger" onClick={() => handleAdminDecision('Rejected')}>
+                      Reject Record
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {!isFrozen && !user.isAdmin && (
                 <div style={{ display: 'flex', justifyContent: 'flex-end', borderTop: '1px solid #e5e7eb', paddingTop: '24px' }}>
                   <button type="submit" className="btn btn-primary" style={{ width: 'auto', padding: '12px 32px' }}>
                     {editingRecordId ? 'Update Record' : 'Submit for Approval'}
