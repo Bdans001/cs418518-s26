@@ -24,11 +24,11 @@ function App() {
   useEffect(() => {
     if (view === 'dashboard' && user) {
       if (!user.isAdmin && subView === 'advising-history') {
-        axios.get(`http://localhost:5000/api/advising-history/${user.email}`)
+        axios.get(`https://cs418-backend-t3ue.onrender.com/api/advising-history/${user.email}`)
           .then(res => setAdvisingHistory(res.data))
           .catch(err => console.error(err));
       } else if (user.isAdmin && subView === 'admin-dashboard') {
-        axios.get(`http://localhost:5000/api/admin/advising`)
+        axios.get(`https://cs418-backend-t3ue.onrender.com/api/admin/advising`)
           .then(res => setAdminRecords(res.data))
           .catch(err => console.error(err));
       }
@@ -58,7 +58,7 @@ function App() {
     const endpoint = view === 'login' ? '/login' : '/register';
     try {
       const payload = view === 'login' ? { ...formData, recaptchaToken } : formData;
-      const res = await axios.post(`http://localhost:5000${endpoint}`, payload);
+      const res = await axios.post(`https://cs418-backend-t3ue.onrender.com${endpoint}`, payload);
       
       if (view === 'login') {
         setUser(res.data.user);
@@ -84,9 +84,9 @@ function App() {
         plannedCourses: advisingForm.plannedCourses
       };
       if (editingRecordId) {
-        await axios.put(`http://localhost:5000/api/update-advising/${editingRecordId}`, payload);
+        await axios.put(`https://cs418-backend-t3ue.onrender.com/api/update-advising/${editingRecordId}`, payload);
       } else {
-        await axios.post('http://localhost:5000/api/submit-advising', payload);
+        await axios.post('https://cs418-backend-t3ue.onrender.com/api/submit-advising', payload);
       }
       setSubView('advising-history');
     } catch (err) {
@@ -96,7 +96,7 @@ function App() {
 
   const loadRecord = async (id, isAdminView = false) => {
     try {
-      const res = await axios.get(`http://localhost:5000/api/advising-record/${id}`);
+      const res = await axios.get(`https://cs418-backend-t3ue.onrender.com/api/advising-record/${id}`);
       setAdvisingForm({
         lastTerm: res.data.last_term_attended || '', 
         lastGpa: res.data.last_gpa || '',
@@ -119,7 +119,7 @@ function App() {
       return alert("You must provide feedback before submitting a decision.");
     }
     try {
-      await axios.put(`http://localhost:5000/api/admin/advising/${editingRecordId}`, { 
+      await axios.put(`https://cs418-backend-t3ue.onrender.com/api/admin/advising/${editingRecordId}`, { 
         status, 
         feedback: adminFeedbackInput 
       });
@@ -135,7 +135,7 @@ function App() {
     const newPass = prompt("Enter your new password:");
     if (!newPass) return;
     try {
-      await axios.post('http://localhost:5000/reset-password', { email, newPassword: newPass });
+      await axios.post('https://cs418-backend-t3ue.onrender.com/reset-password', { email, newPassword: newPass });
       alert("Password reset successfully! You can now log in.");
     } catch (err) {
       alert("Failed to reset password. Make sure the email is registered.");
@@ -373,7 +373,7 @@ function App() {
             </div>
             <label style={{ display: 'block', fontWeight: '500', marginBottom: '8px' }}>University ID (UIN)</label>
             <input className="input-field" value={user?.uin || ''} onChange={e => setUser({...user, uin: e.target.value})} />
-            <button className="btn btn-primary" style={{ marginTop: '16px' }} onClick={() => axios.post('http://localhost:5000/update-profile', user).then(() => alert('Profile Details Saved'))}>Save Changes</button>
+            <button className="btn btn-primary" style={{ marginTop: '16px' }} onClick={() => axios.post('https://cs418-backend-t3ue.onrender.com/update-profile', user).then(() => alert('Profile Details Saved'))}>Save Changes</button>
           </div>
         )}
 
@@ -386,7 +386,7 @@ function App() {
             </div>
             <button className="btn btn-secondary" style={{ border: '1px solid #d1d5db' }} onClick={() => {
               const p = prompt("Enter your new password:");
-              if(p) axios.post('http://localhost:5000/reset-password', {email: user.email, newPassword: p}).then(() => alert('Password Successfully Updated!'))
+              if(p) axios.post('https://cs418-backend-t3ue.onrender.com/reset-password', {email: user.email, newPassword: p}).then(() => alert('Password Successfully Updated!'))
             }}>Update Password</button>
           </div>
         )}
